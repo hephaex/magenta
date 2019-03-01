@@ -1,16 +1,17 @@
-# Copyright 2016 Google Inc. All Rights Reserved.
+# Copyright 2019 The Magenta Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#    http://www.apache.org/licenses/LICENSE-2.0
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 """Utility functions for working with polyphonic sequences."""
 
 from __future__ import division
@@ -18,16 +19,13 @@ from __future__ import division
 import collections
 import copy
 
-# internal imports
-
-from six.moves import range  # pylint: disable=redefined-builtin
-import tensorflow as tf
-
 from magenta.music import constants
 from magenta.music import events_lib
 from magenta.music import sequences_lib
 from magenta.pipelines import statistics
 from magenta.protobuf import music_pb2
+from six.moves import range  # pylint: disable=redefined-builtin
+import tensorflow as tf
 
 DEFAULT_STEPS_PER_QUARTER = constants.DEFAULT_STEPS_PER_QUARTER
 MAX_MIDI_PITCH = constants.MAX_MIDI_PITCH
@@ -236,6 +234,17 @@ class PolyphonicSequence(events_lib.EventSequence):
         steps += 1
     return steps
 
+  @property
+  def steps(self):
+    """Return a Python list of the time step at each event in this sequence."""
+    step = self.start_step
+    result = []
+    for event in self:
+      result.append(step)
+      if event.event_type == PolyphonicEvent.STEP_END:
+        step += 1
+    return result
+
   @staticmethod
   def _from_quantized_sequence(quantized_sequence, start_step=0):
     """Populate self with events from the given quantized NoteSequence object.
@@ -422,10 +431,10 @@ def extract_polyphonic_sequences(
   """
   sequences_lib.assert_is_relative_quantized_sequence(quantized_sequence)
 
-  stats = dict([(stat_name, statistics.Counter(stat_name)) for stat_name in
-                ['polyphonic_tracks_discarded_too_short',
-                 'polyphonic_tracks_discarded_too_long',
-                 'polyphonic_tracks_discarded_more_than_1_program']])
+  stats = dict((stat_name, statistics.Counter(stat_name)) for stat_name in
+               ['polyphonic_tracks_discarded_too_short',
+                'polyphonic_tracks_discarded_too_long',
+                'polyphonic_tracks_discarded_more_than_1_program'])
 
   steps_per_bar = sequences_lib.steps_per_bar_in_quantized_sequence(
       quantized_sequence)

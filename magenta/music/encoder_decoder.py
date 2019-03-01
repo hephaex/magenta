@@ -1,16 +1,17 @@
-# Copyright 2016 Google Inc. All Rights Reserved.
+# Copyright 2019 The Magenta Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#    http://www.apache.org/licenses/LICENSE-2.0
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 """Classes for converting between event sequences and models inputs/outputs.
 
 OneHotEncoding is an abstract class for specifying a one-hot encoding, i.e.
@@ -48,17 +49,14 @@ from __future__ import division
 from __future__ import print_function
 
 import abc
-
-# internal imports
-
-import numpy as np
-from six.moves import range  # pylint: disable=redefined-builtin
-import tensorflow as tf
+import numbers
 
 from magenta.common import sequence_example_lib
 from magenta.music import constants
 from magenta.pipelines import pipeline
-
+import numpy as np
+from six.moves import range  # pylint: disable=redefined-builtin
+import tensorflow as tf
 
 DEFAULT_STEPS_PER_BAR = constants.DEFAULT_STEPS_PER_BAR
 DEFAULT_LOOKBACK_DISTANCES = [DEFAULT_STEPS_PER_BAR, DEFAULT_STEPS_PER_BAR * 2]
@@ -109,6 +107,21 @@ class OneHotEncoding(object):
       The decoded event value.
     """
     pass
+
+  def event_to_num_steps(self, unused_event):
+    """Returns the number of time steps corresponding to an event value.
+
+    This is used for normalization when computing metrics. Subclasses with
+    variable step size should override this method.
+
+    Args:
+      unused_event: An event value for which to return the number of steps.
+
+    Returns:
+      The number of steps corresponding to the given event value, defaulting to
+      one.
+    """
+    return 1
 
 
 class EventSequenceEncoderDecoder(object):
@@ -209,6 +222,22 @@ class EventSequenceEncoderDecoder(object):
     """
     pass
 
+  def labels_to_num_steps(self, labels):
+    """Returns the total number of time steps for a sequence of class labels.
+
+    This is used for normalization when computing metrics. Subclasses with
+    variable step size should override this method.
+
+    Args:
+      labels: A list-like sequence of integers in the range
+          [0, self.num_classes).
+
+    Returns:
+      The total number of time steps for the label sequence, defaulting to one
+      per event.
+    """
+    return len(labels)
+
   def encode(self, events):
     """Returns a SequenceExample for the given event sequence.
 
@@ -265,10 +294,22 @@ class EventSequenceEncoderDecoder(object):
     Returns:
       A Python list of chosen class indices, one for each event sequence.
     """
-    num_classes = len(softmax[0][0])
     chosen_classes = []
     for i in range(len(event_sequences)):
-      chosen_class = np.random.choice(num_classes, p=softmax[i][-1])
+      if not isinstance(softmax[0][0][0], numbers.Number):
+        # In this case, softmax is a list of several sub-softmaxes, each
+        # potentially with a different size.
+        # shape: [[beam_size, event_num, softmax_size]]
+        chosen_class = []
+        for sub_softmax in softmax:
+          num_classes = len(sub_softmax[0][0])
+          chosen_class.append(
+              np.random.choice(num_classes, p=sub_softmax[i][-1]))
+      else:
+        # In this case, softmax is just one softmax.
+        # shape: [beam_size, event_num, softmax_size]
+        num_classes = len(softmax[0][0])
+        chosen_class = np.random.choice(num_classes, p=softmax[i][-1])
       event = self.class_index_to_event(chosen_class, event_sequences[i])
       event_sequences[i].append(event)
       chosen_classes.append(chosen_class)
@@ -307,7 +348,12 @@ class EventSequenceEncoderDecoder(object):
       loglik = 0.0
       for softmax_pos, position in enumerate(range(start_pos, end_pos)):
         index = self.events_to_label(event_sequences[i], position)
-        loglik += np.log(softmax[i][softmax_pos][index])
+        if isinstance(index, numbers.Number):
+          loglik += np.log(softmax[i][softmax_pos][index])
+        else:
+          for sub_softmax_i in range(len(index)):
+            loglik += np.log(
+                softmax[i][softmax_pos][sub_softmax_i][index[sub_softmax_i]])
       all_loglik.append(loglik)
     return all_loglik
 
@@ -384,6 +430,47 @@ class OneHotEventSequenceEncoderDecoder(EventSequenceEncoderDecoder):
     """
     return self._one_hot_encoding.decode_event(class_index)
 
+  def labels_to_num_steps(self, labels):
+    """Returns the total number of time steps for a sequence of class labels.
+
+    Args:
+      labels: A list-like sequence of integers in the range
+          [0, self.num_classes).
+
+    Returns:
+      The total number of time steps for the label sequence, as determined by
+      the one-hot encoding.
+    """
+    events = []
+    for label in labels:
+      events.append(self.class_index_to_event(label, events))
+    return sum(self._one_hot_encoding.event_to_num_steps(event)
+               for event in events)
+
+
+class OneHotIndexEventSequenceEncoderDecoder(OneHotEventSequenceEncoderDecoder):
+  """An EventSequenceEncoderDecoder that produces one-hot indices."""
+
+  @property
+  def input_size(self):
+    return 1
+
+  @property
+  def input_depth(self):
+    return self._one_hot_encoding.num_classes
+
+  def events_to_input(self, events, position):
+    """Returns the one-hot index for the event at the given position.
+
+    Args:
+      events: A list-like sequence of events.
+      position: An integer event position in the event sequence.
+
+    Returns:
+      An integer input event index.
+    """
+    return [self._one_hot_encoding.encode_event(events[position])]
+
 
 class LookbackEventSequenceEncoderDecoder(EventSequenceEncoderDecoder):
   """An EventSequenceEncoderDecoder that encodes repeated events and meter."""
@@ -402,9 +489,10 @@ class LookbackEventSequenceEncoderDecoder(EventSequenceEncoderDecoder):
          metric position of the next event.
     """
     self._one_hot_encoding = one_hot_encoding
-    self._lookback_distances = (lookback_distances
-                                if lookback_distances is not None
-                                else DEFAULT_LOOKBACK_DISTANCES)
+    if lookback_distances is None:
+      self._lookback_distances = DEFAULT_LOOKBACK_DISTANCES
+    else:
+      self._lookback_distances = lookback_distances
     self._binary_counter_bits = binary_counter_bits
 
   @property
@@ -556,6 +644,30 @@ class LookbackEventSequenceEncoderDecoder(EventSequenceEncoderDecoder):
     # Return the event for that class index.
     return self._one_hot_encoding.decode_event(class_index)
 
+  def labels_to_num_steps(self, labels):
+    """Returns the total number of time steps for a sequence of class labels.
+
+    This method assumes the event sequence begins with the event corresponding
+    to the first label, which is inconsistent with the `encode` method in
+    EventSequenceEncoderDecoder that uses the second event as the first label.
+    Therefore, if the label sequence includes a lookback to the very first event
+    and that event is a different number of time steps than the default event,
+    this method will give an incorrect answer.
+
+    Args:
+      labels: A list-like sequence of integers in the range
+          [0, self.num_classes).
+
+    Returns:
+      The total number of time steps for the label sequence, as determined by
+      the one-hot encoding.
+    """
+    events = []
+    for label in labels:
+      events.append(self.class_index_to_event(label, events))
+    return sum(self._one_hot_encoding.event_to_num_steps(event)
+               for event in events)
+
 
 class ConditionalEventSequenceEncoderDecoder(object):
   """An encoder/decoder for conditional event sequences.
@@ -670,6 +782,19 @@ class ConditionalEventSequenceEncoderDecoder(object):
     return self._target_encoder_decoder.class_index_to_event(
         class_index, target_events)
 
+  def labels_to_num_steps(self, labels):
+    """Returns the total number of time steps for a sequence of class labels.
+
+    Args:
+      labels: A list-like sequence of integers in the range
+          [0, self.num_classes).
+
+    Returns:
+      The total number of time steps for the label sequence, as determined by
+      the target encoder/decoder.
+    """
+    return self._target_encoder_decoder.labels_to_num_steps(labels)
+
   def encode(self, control_events, target_events):
     """Returns a SequenceExample for the given event sequence pair.
 
@@ -776,6 +901,52 @@ class ConditionalEventSequenceEncoderDecoder(object):
     """
     return self._target_encoder_decoder.evaluate_log_likelihood(
         target_event_sequences, softmax)
+
+
+class OptionalEventSequenceEncoder(EventSequenceEncoderDecoder):
+  """An encoder that augments a base encoder with a disable flag.
+
+  This encoder encodes event sequences consisting of tuples where the first
+  element is a disable flag. When set, the encoding consists of a 1 followed by
+  a zero-encoding the size of the base encoder's input. When unset, the encoding
+  consists of a 0 followed by the base encoder's encoding.
+  """
+
+  def __init__(self, encoder):
+    """Initialize an OptionalEventSequenceEncoder object.
+
+    Args:
+      encoder: The base EventSequenceEncoderDecoder to use.
+    """
+    self._encoder = encoder
+
+  @property
+  def input_size(self):
+    return 1 + self._encoder.input_size
+
+  @property
+  def num_classes(self):
+    raise NotImplementedError
+
+  @property
+  def default_event_label(self):
+    raise NotImplementedError
+
+  def events_to_input(self, events, position):
+    # The event sequence is a list of tuples where the first element is a
+    # disable flag.
+    disable, _ = events[position]
+    if disable:
+      return [1.0] + [0.0] * self._encoder.input_size
+    else:
+      return [0.0] + self._encoder.events_to_input(
+          [event for _, event in events], position)
+
+  def events_to_label(self, events, position):
+    raise NotImplementedError
+
+  def class_index_to_event(self, class_index, events):
+    raise NotImplementedError
 
 
 class MultipleEventSequenceEncoder(EventSequenceEncoderDecoder):

@@ -1,37 +1,33 @@
-# Copyright 2017 Google Inc. All Rights Reserved.
+# Copyright 2019 The Magenta Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#    http://www.apache.org/licenses/LICENSE-2.0
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 """Tests for pianoroll_lib."""
 
 import copy
 
-# internal imports
-
-import tensorflow as tf
-
 from magenta.common import testing_lib as common_testing_lib
-
 from magenta.music import pianoroll_lib
-
 from magenta.music import sequences_lib
 from magenta.music import testing_lib
 from magenta.protobuf import music_pb2
+import tensorflow as tf
 
 
 class PianorollLibTest(tf.test.TestCase):
 
   def setUp(self):
-    self.maxDiff = None
+    self.maxDiff = None  # pylint:disable=invalid-name
 
     self.note_sequence = common_testing_lib.parse_test_proto(
         music_pb2.NoteSequence,
@@ -136,10 +132,12 @@ class PianorollLibTest(tf.test.TestCase):
     pianoroll_seq.append((0))
 
     self.assertEqual(1, pianoroll_seq.num_steps)
+    self.assertListEqual([0], pianoroll_seq.steps)
 
     pianoroll_seq.set_length(5)
 
     self.assertEqual(5, pianoroll_seq.num_steps)
+    self.assertListEqual([0, 1, 2, 3, 4], pianoroll_seq.steps)
 
     self.assertEqual([(0), (), (), (), ()], list(pianoroll_seq))
 
@@ -147,6 +145,7 @@ class PianorollLibTest(tf.test.TestCase):
     pianoroll_seq.set_length(10)
 
     self.assertEqual(10, pianoroll_seq.num_steps)
+    self.assertListEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], pianoroll_seq.steps)
 
     self.assertEqual([(0)] + [()] * 9, list(pianoroll_seq))
 

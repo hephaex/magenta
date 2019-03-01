@@ -1,27 +1,26 @@
-# Copyright 2017 Google Inc. All Rights Reserved.
+# Copyright 2019 The Magenta Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#    http://www.apache.org/licenses/LICENSE-2.0
+#     http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 """Train and evaluate a performance RNN model."""
 
 import os
-
-# internal imports
-import tensorflow as tf
 
 import magenta
 from magenta.models.performance_rnn import performance_model
 from magenta.models.shared import events_rnn_graph
 from magenta.models.shared import events_rnn_train
+import tensorflow as tf
 
 FLAGS = tf.app.flags.FLAGS
 tf.app.flags.DEFINE_string('run_dir', '/tmp/performance_rnn/logdir/run1',
@@ -85,7 +84,7 @@ def main(unused_argv):
   config.hparams.parse(FLAGS.hparams)
 
   mode = 'eval' if FLAGS.eval else 'train'
-  graph = events_rnn_graph.build_graph(
+  build_graph_fn = events_rnn_graph.get_build_graph_fn(
       mode, config, sequence_example_file_paths)
 
   train_dir = os.path.join(run_dir, 'train')
@@ -97,13 +96,14 @@ def main(unused_argv):
     tf.gfile.MakeDirs(eval_dir)
     tf.logging.info('Eval dir: %s', eval_dir)
     num_batches = (
-        (FLAGS.num_eval_examples if FLAGS.num_eval_examples else
+        (FLAGS.num_eval_examples or
          magenta.common.count_records(sequence_example_file_paths)) //
         config.hparams.batch_size)
-    events_rnn_train.run_eval(graph, train_dir, eval_dir, num_batches)
+    events_rnn_train.run_eval(build_graph_fn, train_dir, eval_dir, num_batches)
 
   else:
-    events_rnn_train.run_training(graph, train_dir, FLAGS.num_training_steps,
+    events_rnn_train.run_training(build_graph_fn, train_dir,
+                                  FLAGS.num_training_steps,
                                   FLAGS.summary_frequency,
                                   checkpoints_to_keep=FLAGS.num_checkpoints)
 
